@@ -1,14 +1,11 @@
 {
     "training": {
+        "total_epochs": 20,
         "master_seed": 0,
-        "cache_minibatch": 8,
-        "train_minibatch": 8,
-        "offload_param_count": 0,
-        "lr": 1e-05,
-        "weight_decay": 0.0,
-        "warmup_steps": 5,
-        "reset_optim_every": 50,
-        "save_every": 50,
+        "cache_minibatch": 4,
+        "train_minibatch": 4,
+        "lr": 1e-04,
+        "weight_decay": 0.01,
         "save_folder": "testing",
         "wandb_key": null,
         "wandb_project": null,
@@ -17,48 +14,12 @@
         "hf_repo_id": null,
         "hf_token": null
     },
-    "inference": {
-        "inference_every": 50,
-        "inference_folder": "inference_folder",
-        "steps": 20,
-        "guidance": 0,
-        "cfg": 3,
-        "prompts": [
-            "a cute cat sat on a mat while receiving a head pat from his owner called Matt",
-            "baked potato, on the space floating orbiting around the earth"
-        ],
-        "first_n_steps_wo_cfg": 0,
-        "image_dim": [
-            1024,
-            1024
-        ],
-        "t5_max_length": 512
-    },
-    "extra_inference_config": [
-        {
-            "inference_every": 100,
-            "inference_folder": "inference_folder",
-            "steps": 20,
-            "guidance": 0,
-            "cfg": 4,
-            "prompts": [
-                "a cute cat sat on a mat while receiving a head pat from his owner called Matt",
-                "baked potato, on the space floating orbiting around the earth"
-            ],
-            "first_n_steps_wo_cfg": 0,
-            "image_dim": [
-                1024,
-                1024
-            ],
-            "t5_max_length": 512
-        }
-    ],
     "dataloader": {
-        "batch_size": 128,
+        "batch_size": 8,
         "jsonl_metadata_path": "test_training_data.jsonl",
         "image_folder_path": "furry_50k_4o/images",
         "base_resolution": [
-            256
+            1024
         ],
         "shuffle_tags": true,
         "tag_drop_percentage": 0.0,
@@ -79,8 +40,8 @@
         "t5_max_length": 512
     },
     "lora": {
-        "rank": 8,
-        "alpha": 8,
+        "rank": 16,
+        "alpha": 16,
         "target_layers": ["double_blocks","single_blocks"],
         "base_model_quant_level": "full"
     }

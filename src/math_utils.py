@@ -1,29 +1,40 @@
 import torch
 
-# cuda impl of hungarian method
-from torch_linear_assignment import batch_linear_assignment
-from torch_linear_assignment import assignment_to_indices
-
-
 def cosine_optimal_transport(X, Y):
     """
-    Compute optimal transport between two sets of vectors using cosine distance.
+    Approximate optimal transport between two sets using cosine similarity,
+    enforcing one-to-one assignment like the Hungarian method.
 
-    Parameters:
-    X: torch.Tensor of shape (n, d)
-    Y: torch.Tensor of shape (m, d)
+    Args:
+        X (torch.Tensor): (N, D) Feature vectors on CUDA.
+        Y (torch.Tensor): (M, D) Feature vectors on CUDA.
 
     Returns:
-    P: optimal transport plan matrix of shape (n, m)
+        transport_cost (torch.Tensor): Optimal transport cost (scalar).
+        (row_indices, col_indices): Hard assignment indices.
     """
-    # Normalize input vectors
-    X_norm = X / torch.norm(X, dim=1, keepdim=True)
-    Y_norm = Y / torch.norm(Y, dim=1, keepdim=True)
+    # Normalize vectors for cosine similarity
+    X_norm = X / (torch.norm(X, dim=1, keepdim=True) + 1e-8)
+    Y_norm = Y / (torch.norm(Y, dim=1, keepdim=True) + 1e-8)
 
-    # Compute cost matrix using matrix multiplication (cosine similarity)
-    C = -torch.mm(X_norm, Y_norm.t())  # negative because we want to minimize distance
+    # Compute cosine similarity cost matrix
+    cost_matrix = -torch.mm(X_norm, Y_norm.T)  # Negative since we minimize
 
-    assignment = batch_linear_assignment(C.unsqueeze(dim=0))
-    matching_pairs = assignment_to_indices(assignment)
+    # Get one-to-one assignment
+    row_indices = torch.arange(cost_matrix.shape[0], device=cost_matrix.device)
+    col_indices = torch.zeros_like(row_indices)  # Placeholder for assignments
 
-    return C, matching_pairs
+    assigned_cols = set()
+    for i in range(cost_matrix.shape[0]):
+        # Find the best column match for each row
+        sorted_cols = torch.argsort(cost_matrix[i])
+        for col in sorted_cols:
+            if col.item() not in assigned_cols:
+                col_indices[i] = col
+                assigned_cols.add(col.item())
+                break
+
+    # Compute transport cost
+    transport_cost = cost_matrix.gather(1, col_indices.unsqueeze(1)).sum()
+
+    return transport_cost, (row_indices, col_indices)

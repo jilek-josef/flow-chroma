@@ -12,6 +12,4 @@ transformers
 safetensors
 sentencepiece
 bitsandbytes==0.45.3
-torchastic
-torch-linear-assignment
 huggingface_hub
