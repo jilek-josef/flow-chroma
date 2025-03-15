@@ -4,6 +4,7 @@ import json
 import random
 import hashlib
 import logging
+import traceback
 
 from tqdm import tqdm
 from PIL import Image
@@ -255,6 +256,7 @@ class TextImageDataset(Dataset):
                             return Image.open(alt_image_path).convert("RGB")
             return None
         except Exception as e:
+            traceback.print_exc()
             log.error(
                 f"An error occurred: {e} for {sample['filename']} on rank {self.rank}"
             )

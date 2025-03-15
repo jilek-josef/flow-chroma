@@ -287,11 +287,12 @@ def cache_latents(dataset, model_config, rank, batch_size):
         t5 = T5EncoderModel(T5Config.from_json_file(model_config.t5_config_path)).to(rank)
         t5_tokenizer = T5Tokenizer.from_pretrained(model_config.t5_tokenizer_path)
 
-        acc_latents = []
-        acc_embeddings = []
-        acc_masks = []
+        # Step 1: Load all batches into memory (so we can iterate multiple times)
+        batches = list(dataset)  # This ensures we can iterate multiple times
 
-        for images, captions, _ in tqdm(dataset, desc="Caching latents and embeddings"):
+        # Step 2: First pass → Process T5 embeddings and store on CPU
+        acc_embeddings, acc_masks = [], []
+        for _, captions, _ in tqdm(batches, desc="Processing T5 embeddings"):
             text_inputs = t5_tokenizer(
                 captions,
                 padding="max_length",
@@ -300,28 +301,40 @@ def cache_latents(dataset, model_config, rank, batch_size):
                 return_tensors="pt",
             ).to(rank)
 
-            latents = ae.encode_for_train(images.to(rank)).to("cpu")
             embeddings = t5(text_inputs.input_ids, text_inputs.attention_mask).to("cpu")
             masks = text_inputs.attention_mask.to("cpu")
 
-            acc_latents.append(latents)
             acc_embeddings.append(embeddings)
             acc_masks.append(masks)
 
-            if len(acc_latents) >= batch_size:
-                latents_cache.append(torch.cat(acc_latents, dim=0))
+            if len(acc_embeddings) >= batch_size:
                 embeddings_cache.append(torch.cat(acc_embeddings, dim=0))
                 masks_cache.append(torch.cat(acc_masks, dim=0))
-                acc_latents, acc_embeddings, acc_masks = [], [], []
+                acc_embeddings, acc_masks = [], []
 
-        if acc_latents:  # Add remaining data
-            latents_cache.append(torch.cat(acc_latents, dim=0))
+        if acc_embeddings:  # Add remaining data
             embeddings_cache.append(torch.cat(acc_embeddings, dim=0))
             masks_cache.append(torch.cat(acc_masks, dim=0))
 
-        # Offload to CPU
-        ae.to("cpu")
+        # Offload T5 model to CPU to free GPU memory
         t5.to("cpu")
+        torch.cuda.empty_cache()
+
+        # Step 3: Second pass → Process VAE latents and store on CPU
+        acc_latents = []
+        for images, _, _ in tqdm(batches, desc="Processing VAE latents"):
+            latents = ae.encode_for_train(images.to(rank)).to("cpu")
+            acc_latents.append(latents)
+
+            if len(acc_latents) >= batch_size:
+                latents_cache.append(torch.cat(acc_latents, dim=0))
+                acc_latents = []
+
+        if acc_latents:  # Add remaining data
+            latents_cache.append(torch.cat(acc_latents, dim=0))
+
+        # Offload VAE model to CPU to free GPU memory
+        ae.to("cpu")
         torch.cuda.empty_cache()
 
     return latents_cache, embeddings_cache, masks_cache
@@ -430,7 +443,7 @@ def train_chroma(rank, world_size, debug=False):
     # Cache latents and embeddings before training
     latents_cache, embeddings_cache, masks_cache = cache_latents(dataset, model_config, rank, training_config.train_minibatch)
 
-    model.model.requires_grad_(True)
+    model.requires_grad_(True)
     scaler = torch.cuda.amp.GradScaler()
     optimizer, scheduler = init_optimizer(
         model,
