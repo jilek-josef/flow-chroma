@@ -322,6 +322,7 @@ def cache_latents(dataset, model_config, rank, batch_size):
         # Offload to CPU
         ae.to("cpu")
         t5.to("cpu")
+        torch.cuda.empty_cache()
 
     return latents_cache, embeddings_cache, masks_cache
 
