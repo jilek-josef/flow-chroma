@@ -10,7 +10,6 @@ import bitsandbytes as bnb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
 
 import random
 
@@ -93,19 +92,6 @@ class LoraConfig:
     alpha: int
     target_layers: list[str]
     base_model_quant_level: Optional[str] = "full"
-
-
-def setup_distributed(rank, world_size):
-    """Initialize distributed training"""
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
-    os.environ["LOCAL_RANK"] = str(rank)
-    os.environ["RANK"] = str(rank)
-    os.environ["WORLD_SIZE"] = str(world_size)
-
-    # Initialize process group
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
 
 
 def create_distribution(num_points, device=None):
@@ -226,16 +212,6 @@ def init_optimizer(model, trained_layer_keywords, lr, wd, t_total):
     return optimizer, scheduler
 
 
-def synchronize_gradients(model, scale=1):
-    for param in model.parameters():
-        if param.grad is not None:
-            # Synchronize gradients by summing across all processes
-            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
-            # Average the gradients if needed
-            if scale > 1:
-                param.grad /= scale
-
-
 def save_part(model, trained_layer_keywords, path):
     full_state_dict = model.state_dict()
 
@@ -276,7 +252,7 @@ def load_config_from_json(filepath: str):
         return json.load(json_file)
 
 
-def cache_latents(dataset, model_config, rank, batch_size):
+def cache_latents(dataset, model_config, rank):
     """Precompute and store batched latents and embeddings before training to save VRAM."""
     latents_cache = []
     embeddings_cache = []
@@ -291,7 +267,6 @@ def cache_latents(dataset, model_config, rank, batch_size):
         batches = list(dataset)  # This ensures we can iterate multiple times
 
         # Step 2: First pass → Process T5 embeddings and store on CPU
-        acc_embeddings, acc_masks = [], []
         for _, captions, _ in tqdm(batches, desc="Processing T5 embeddings"):
             text_inputs = t5_tokenizer(
                 captions,
@@ -304,34 +279,17 @@ def cache_latents(dataset, model_config, rank, batch_size):
             embeddings = t5(text_inputs.input_ids, text_inputs.attention_mask).to("cpu")
             masks = text_inputs.attention_mask.to("cpu")
 
-            acc_embeddings.append(embeddings)
-            acc_masks.append(masks)
-
-            if len(acc_embeddings) >= batch_size:
-                embeddings_cache.append(torch.cat(acc_embeddings, dim=0))
-                masks_cache.append(torch.cat(acc_masks, dim=0))
-                acc_embeddings, acc_masks = [], []
-
-        if acc_embeddings:  # Add remaining data
-            embeddings_cache.append(torch.cat(acc_embeddings, dim=0))
-            masks_cache.append(torch.cat(acc_masks, dim=0))
+            embeddings_cache.append(embeddings)
+            masks_cache.append(masks)
 
         # Offload T5 model to CPU to free GPU memory
         t5.to("cpu")
         torch.cuda.empty_cache()
 
         # Step 3: Second pass → Process VAE latents and store on CPU
-        acc_latents = []
         for images, _, _ in tqdm(batches, desc="Processing VAE latents"):
             latents = ae.encode_for_train(images.to(rank)).to("cpu")
-            acc_latents.append(latents)
-
-            if len(acc_latents) >= batch_size:
-                latents_cache.append(torch.cat(acc_latents, dim=0))
-                acc_latents = []
-
-        if acc_latents:  # Add remaining data
-            latents_cache.append(torch.cat(acc_latents, dim=0))
+            latents_cache.append(latents)
 
         # Offload VAE model to CPU to free GPU memory
         ae.to("cpu")
@@ -341,10 +299,6 @@ def cache_latents(dataset, model_config, rank, batch_size):
 
 
 def train_chroma(rank, world_size, debug=False):
-    # Initialize distributed training
-    if not debug:
-        setup_distributed(rank, world_size)
-
     config_data = load_config_from_json("training_config_chroma_lora.json")
 
     training_config = TrainingConfig(**config_data["training"])
@@ -441,7 +395,7 @@ def train_chroma(rank, world_size, debug=False):
     )
 
     # Cache latents and embeddings before training
-    latents_cache, embeddings_cache, masks_cache = cache_latents(dataset, model_config, rank, training_config.train_minibatch)
+    latents_cache, embeddings_cache, masks_cache = cache_latents(dataset, model_config, rank)
 
     model.requires_grad_(True)
     scaler = torch.cuda.amp.GradScaler()
@@ -458,9 +412,6 @@ def train_chroma(rank, world_size, debug=False):
         torch.manual_seed(training_config.master_seed)
         for counter, (latents, embeddings, masks) in enumerate(zip(latents_cache, embeddings_cache, masks_cache)):
             latents, embeddings, masks = latents.to(rank), embeddings.to(rank), masks.to(rank)
-
-            if not debug:
-                dist.barrier()
 
             # move model to device
             model.to(rank)
@@ -501,53 +452,26 @@ def train_chroma(rank, world_size, debug=False):
             # aliasing
             optimizer.zero_grad()
 
-            mb = training_config.train_minibatch
+            mb = dataloader_config.batch_size
             loss_log = []
-            for tmb_i in tqdm(
-                range(dataloader_config.batch_size // mb // world_size),
-                desc=f"minibatch training, Rank {rank}",
-                position=rank,
-            ):
-                # do this inside for loops!
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    pred = model(
-                        img=noisy_latents[tmb_i * mb : tmb_i * mb + mb].to(
-                            rank, non_blocking=True
-                        ),
-                        img_ids=image_pos_id[tmb_i * mb : tmb_i * mb + mb].to(
-                            rank, non_blocking=True
-                        ),
-                        txt=acc_embeddings[tmb_i * mb : tmb_i * mb + mb].to(
-                            rank, non_blocking=True
-                        ),
-                        txt_ids=text_ids[tmb_i * mb : tmb_i * mb + mb].to(
-                            rank, non_blocking=True
-                        ),
-                        txt_mask=acc_mask[tmb_i * mb : tmb_i * mb + mb].to(
-                            rank, non_blocking=True
-                        ),
-                        timesteps=input_timestep[tmb_i * mb : tmb_i * mb + mb].to(
-                            rank, non_blocking=True
-                        ),
-                        guidance=static_guidance[tmb_i * mb : tmb_i * mb + mb].to(
-                            rank, non_blocking=True
-                        ),
-                    )
-                    # TODO: need to scale the loss with rank count and grad accum!
-                    loss = F.mse_loss(
-                        pred,
-                        target[tmb_i * mb : tmb_i * mb + mb],
-                    ) / (dataloader_config.batch_size // mb)
-
-                scaler.scale(loss).backward()
-
-                loss_log.append(
-                    loss.detach().clone() * (dataloader_config.batch_size // mb)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                pred = model(
+                    img=noisy_latents.to(rank, non_blocking=True),
+                    img_ids=image_pos_id.to(rank, non_blocking=True),
+                    txt=acc_embeddings.to(rank, non_blocking=True),
+                    txt_ids=text_ids.to(rank, non_blocking=True),
+                    txt_mask=acc_mask.to(rank, non_blocking=True),
+                    timesteps=input_timestep.to(rank, non_blocking=True),
+                    guidance=static_guidance.to(rank, non_blocking=True),
                 )
-            loss_log = sum(loss_log) / len(loss_log)
+                loss = F.mse_loss(pred, target)
 
-            if not debug:
-                synchronize_gradients(model)
+            scaler.scale(loss).backward()
+
+            loss_log.append(
+                loss.detach().clone() * (dataloader_config.batch_size // mb)
+            )
+            loss_log = sum(loss_log) / len(loss_log)
 
             scaler.step(optimizer)
             scheduler.step()
@@ -555,9 +479,6 @@ def train_chroma(rank, world_size, debug=False):
 
             if training_config.wandb_project is not None and rank == 0:
                 wandb.log({"loss": loss_log, "lr": training_config.lr})
-
-            if not debug:
-                dist.barrier()
 
 
         # save final model
@@ -570,6 +491,3 @@ def train_chroma(rank, world_size, debug=False):
                 training_config.hf_repo_id,
                 training_config.hf_token,
             )
-
-    if not debug:
-        dist.destroy_process_group()
