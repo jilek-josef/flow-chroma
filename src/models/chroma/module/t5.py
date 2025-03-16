@@ -600,12 +600,12 @@ class T5Stack(nn.Module):
                 layer_outputs = ckpt.checkpoint(
                     layer_module,
                     hidden_states.to(device),
-                    attention_mask.to(device),
+                    attention_mask.to(device)
                     (
                         position_bias.to(device)
                         if position_bias != None
                         else position_bias
-                    ),
+                    ), use_reentrant=False
                 )
                 pass
             else:
@@ -667,7 +667,7 @@ class T5Stack(nn.Module):
                         position_bias.to(device)
                         if position_bias != None
                         else position_bias
-                    ),
+                    ), use_reentrant=False
                 )
                 pass
             else:
