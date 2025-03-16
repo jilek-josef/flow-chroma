@@ -349,7 +349,7 @@ def train_chroma(rank, world_size, debug=False):
         model.load_state_dict(load_safetensors(model_config.chroma_path), assign=True)
         model.to(torch.bfloat16)
         model.to(rank)
-        torch.compile(model, mode="max-autotune")
+        model = torch.compile(model, backend="inductor", mode="max-autotune", fullgraph=True)
 
         # set trainable lora layer
         lora_module = {
