@@ -44,6 +44,7 @@ import time
 @dataclass
 class TrainingConfig:
     total_epochs: int
+    time_shift_bias: float
     master_seed: int
     lr: float
     weight_decay: float
@@ -144,7 +145,7 @@ def sample_from_distribution(x, probabilities, num_samples, device=None):
     return sampled_values
 
 
-def prepare_sot_pairings(latents):
+def prepare_sot_pairings(latents, training_config):
     # stochastic optimal transport pairings
     # just use mean because STD is so small and practically negligible
     latents = latents.to(torch.float32)
@@ -163,7 +164,7 @@ def prepare_sot_pairings(latents):
     )
 
     # biasing towards earlier more noisy steps where it's the most uncertain
-    input_timestep = time_shift(0.5, 1, input_timestep)
+    input_timestep = time_shift(training_config.time_shift_bias, 1, input_timestep)
 
     timesteps = input_timestep[:, None, None]
     # 1 is full noise 0 is full image
@@ -436,7 +437,7 @@ def train_chroma(rank, world_size, debug=False):
                 input_timestep,
                 image_pos_id,
                 latent_shape,
-            ) = prepare_sot_pairings(acc_latents.to(rank))
+            ) = prepare_sot_pairings(acc_latents.to(rank), training_config)
             noisy_latents = noisy_latents.to(torch.bfloat16)
             target = target.to(torch.bfloat16)
             input_timestep = input_timestep.to(torch.bfloat16)

@@ -2,6 +2,7 @@
     "training": {
         "total_epochs": 20,
         "master_seed": 0,
+        "time_shift_bias": 0.5,
         "lr": 1e-04,
         "weight_decay": 0.01,
         "save_folder": "testing",
