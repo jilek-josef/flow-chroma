@@ -45,7 +45,6 @@ import time
 class TrainingConfig:
     total_epochs: int
     master_seed: int
-    train_minibatch: int
     lr: float
     weight_decay: float
     save_folder: str
@@ -258,10 +257,24 @@ def cache_latents(dataset, model_config, rank):
     embeddings_cache = []
     masks_cache = []
 
-    with torch.no_grad():
-        ae = AutoEncoder(ae_params).to(rank)
-        t5 = T5EncoderModel(T5Config.from_json_file(model_config.t5_config_path)).to(rank)
+    with (torch.no_grad()):
+        ae = AutoEncoder(ae_params)
+        ae.load_state_dict(load_safetensors(model_config.vae_path), assign=True)
+        ae.to(torch.bfloat16).to(rank)
+
         t5_tokenizer = T5Tokenizer.from_pretrained(model_config.t5_tokenizer_path)
+        t5_config = T5Config.from_json_file(model_config.t5_config_path)
+        with torch.device("meta"):
+            t5 = T5EncoderModel(t5_config)
+        t5.load_state_dict(
+            replace_keys(load_file_multipart(model_config.t5_path)), assign=True
+        )
+        t5.eval()
+        if model_config.t5_to_8bit:
+            cast_linear(t5, torch.float8_e4m3fn)
+        else:
+            t5.to(torch.bfloat16)
+        t5.to(rank)
 
         # Step 1: Load all batches into memory (so we can iterate multiple times)
         batches = list(dataset)  # This ensures we can iterate multiple times
@@ -283,7 +296,7 @@ def cache_latents(dataset, model_config, rank):
             masks_cache.append(masks)
 
         # Offload T5 model to CPU to free GPU memory
-        t5.to("cpu")
+        del t5
         torch.cuda.empty_cache()
 
         # Step 3: Second pass → Process VAE latents and store on CPU
@@ -292,7 +305,7 @@ def cache_latents(dataset, model_config, rank):
             latents_cache.append(latents)
 
         # Offload VAE model to CPU to free GPU memory
-        ae.to("cpu")
+        del ae
         torch.cuda.empty_cache()
 
     return latents_cache, embeddings_cache, masks_cache
@@ -356,25 +369,6 @@ def train_chroma(rank, world_size, debug=False):
         for n, p in find_lora_params(model):
             trained_layer_keywords.append(n)
             p.data = p.data.to(torch.bfloat16)
-
-        # load ae
-        with torch.device("meta"):
-            ae = AutoEncoder(ae_params)
-        ae.load_state_dict(load_safetensors(model_config.vae_path), assign=True)
-        ae.to(torch.bfloat16)
-
-        # load t5
-        t5_tokenizer = T5Tokenizer.from_pretrained(model_config.t5_tokenizer_path)
-        t5_config = T5Config.from_json_file(model_config.t5_config_path)
-        with torch.device("meta"):
-            t5 = T5EncoderModel(t5_config)
-        t5.load_state_dict(
-            replace_keys(load_file_multipart(model_config.t5_path)), assign=True
-        )
-        t5.eval()
-        t5.to(torch.bfloat16)
-        if model_config.t5_to_8bit:
-            cast_linear(t5, torch.float8_e4m3fn)
 
     dataset = TextImageDataset(
         batch_size=dataloader_config.batch_size,

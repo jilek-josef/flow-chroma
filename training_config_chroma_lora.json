@@ -2,8 +2,6 @@
     "training": {
         "total_epochs": 20,
         "master_seed": 0,
-        "cache_minibatch": 4,
-        "train_minibatch": 4,
         "lr": 1e-04,
         "weight_decay": 0.01,
         "save_folder": "testing",
