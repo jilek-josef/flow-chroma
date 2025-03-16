@@ -349,6 +349,7 @@ def train_chroma(rank, world_size, debug=False):
         model.load_state_dict(load_safetensors(model_config.chroma_path), assign=True)
         model.to(torch.bfloat16)
         model.to(rank)
+        torch.compile(model, mode="max-autotune")
 
         # set trainable lora layer
         lora_module = {
@@ -404,6 +405,17 @@ def train_chroma(rank, world_size, debug=False):
     for i in range(0, training_config.total_epochs):
         training_config.master_seed += 1
         torch.manual_seed(training_config.master_seed)
+
+        # Setup tqdm progress bar
+        progress_bar = tqdm(
+            total=len(latents_cache),
+            desc=f"Epoch {i + 1}/{training_config.total_epochs}",
+            position=0,
+            leave=True,
+        )
+
+        epoch_loss = 0.0
+
         for counter, (latents, embeddings, masks) in enumerate(zip(latents_cache, embeddings_cache, masks_cache)):
             latents, embeddings, masks = latents.to(rank), embeddings.to(rank), masks.to(rank)
 
@@ -446,8 +458,6 @@ def train_chroma(rank, world_size, debug=False):
             # aliasing
             optimizer.zero_grad()
 
-            mb = dataloader_config.batch_size
-            loss_log = []
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 pred = model(
                     img=noisy_latents.to(rank, non_blocking=True),
@@ -462,17 +472,23 @@ def train_chroma(rank, world_size, debug=False):
 
             loss.backward()
 
-            loss_log.append(
-                loss.detach().clone() * (dataloader_config.batch_size // mb)
-            )
-            loss_log = sum(loss_log) / len(loss_log)
+            epoch_loss += loss.detach().clone()
+
+            # Update progress bar
+            progress_bar.set_postfix(loss=f"{loss.item():.6f}")
+            progress_bar.update(1)
 
             optimizer.step()
             scheduler.step()
 
             if training_config.wandb_project is not None and rank == 0:
-                wandb.log({"loss": loss_log, "lr": training_config.lr})
+                wandb.log({"loss": loss.detach().clone(), "lr": training_config.lr})
 
+        progress_bar.close()
+
+        # Print epoch summary
+        avg_loss = epoch_loss / len(latents_cache)
+        print(f"Epoch {i + 1}/{training_config.total_epochs} - Avg Loss: {avg_loss:.6f}")
 
         # save final model
         model_filename = f"{training_config.save_folder}/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.pth"
