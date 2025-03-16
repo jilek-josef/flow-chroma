@@ -260,7 +260,7 @@ def cache_latents(dataset, model_config, rank):
     with (torch.no_grad()):
         ae = AutoEncoder(ae_params)
         ae.load_state_dict(load_safetensors(model_config.vae_path), assign=True)
-        ae.to(torch.bfloat16).to(rank)
+        ae.to(rank)
 
         t5_tokenizer = T5Tokenizer.from_pretrained(model_config.t5_tokenizer_path)
         t5_config = T5Config.from_json_file(model_config.t5_config_path)
