@@ -392,7 +392,7 @@ def train_chroma(rank, world_size, debug=False):
     latents_cache, embeddings_cache, masks_cache = cache_latents(dataset, model_config, rank)
 
     model.requires_grad_(True)
-    scaler = torch.cuda.amp.GradScaler()
+
     optimizer, scheduler = init_optimizer(
         model,
         trained_layer_keywords,
@@ -460,16 +460,15 @@ def train_chroma(rank, world_size, debug=False):
                 )
                 loss = F.mse_loss(pred, target)
 
-            scaler.scale(loss).backward()
+            loss.backward()
 
             loss_log.append(
                 loss.detach().clone() * (dataloader_config.batch_size // mb)
             )
             loss_log = sum(loss_log) / len(loss_log)
 
-            scaler.step(optimizer)
+            optimizer.step()
             scheduler.step()
-            scaler.update()
 
             if training_config.wandb_project is not None and rank == 0:
                 wandb.log({"loss": loss_log, "lr": training_config.lr})
