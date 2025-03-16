@@ -349,7 +349,6 @@ def train_chroma(rank, world_size, debug=False):
         model.load_state_dict(load_safetensors(model_config.chroma_path), assign=True)
         model.to(torch.bfloat16)
         model.to(rank)
-        model = torch.compile(model, backend="inductor", mode="max-autotune", fullgraph=True)
 
         # set trainable lora layer
         lora_module = {
@@ -371,6 +370,12 @@ def train_chroma(rank, world_size, debug=False):
             trained_layer_keywords.append(n)
             p.data = p.data.to(torch.bfloat16)
 
+    #force grad and optimize
+    # move model to device
+    model.to(rank)
+    model.requires_grad_(True)
+    #model = torch.compile(model, backend="inductor", mode="max-autotune", fullgraph=True) not compatible
+
     dataset = TextImageDataset(
         batch_size=dataloader_config.batch_size,
         jsonl_path=dataloader_config.jsonl_metadata_path,
@@ -391,8 +396,6 @@ def train_chroma(rank, world_size, debug=False):
 
     # Cache latents and embeddings before training
     latents_cache, embeddings_cache, masks_cache = cache_latents(dataset, model_config, rank)
-
-    model.requires_grad_(True)
 
     optimizer, scheduler = init_optimizer(
         model,
@@ -418,9 +421,6 @@ def train_chroma(rank, world_size, debug=False):
 
         for counter, (latents, embeddings, masks) in enumerate(zip(latents_cache, embeddings_cache, masks_cache)):
             latents, embeddings, masks = latents.to(rank), embeddings.to(rank), masks.to(rank)
-
-            # move model to device
-            model.to(rank)
 
             #acc_latents = torch.cat(acc_latents, dim=0)
             #acc_embeddings = torch.cat(acc_embeddings, dim=0)
