@@ -33,6 +33,7 @@ class LoliAdamW(AdamW):
 
     def get_cluster_idx(self, timestep):
         """Assign timestep to a cluster index."""
+        print(min(timestep // self.cluster_size, self.num_clusters - 1))
         return min(timestep // self.cluster_size, self.num_clusters - 1)
 
     def step(self, closure=None, timestep=None):
@@ -46,7 +47,7 @@ class LoliAdamW(AdamW):
         if timestep is None:
             raise ValueError("Timestep must be provided for LoliAdamW.")
         timestep = (torch.tensor(timestep) * 1000).mean().round().long()
-
+        print(timestep)
         loss = None
         if closure is not None:
             loss = closure()

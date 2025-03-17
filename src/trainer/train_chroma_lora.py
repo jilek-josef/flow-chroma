@@ -479,6 +479,7 @@ def train_chroma(rank, world_size, debug=False):
             noisy_latents = noisy_latents.to(torch.bfloat16)
             target = target.to(torch.bfloat16)
             input_timestep = input_timestep.to(torch.bfloat16)
+            optim_time = input_timestep.detach().clone().to("cuda")
             image_pos_id = image_pos_id.to(rank)
 
             # t5 text id for the model
@@ -520,7 +521,7 @@ def train_chroma(rank, world_size, debug=False):
             progress_bar.set_postfix(loss=f"{loss.item():.6f}")
             progress_bar.update(1)
 
-            optimizer.step(timestep=input_timestep)
+            optimizer.step(timestep=optim_time)
             scheduler.step()
 
             if training_config.wandb_project is not None and rank == 0:
