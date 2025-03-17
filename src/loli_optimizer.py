@@ -41,10 +41,11 @@ class LoliAdamW(AdamW):
 
         Args:
             closure (optional): A closure that reevaluates the model and returns the loss.
-            timestep (int): Current diffusion timestep (0 to max_timesteps)
+            timestep (float): Current diffusion timestep (0 to 1) -> will be multiplied to match timestep
         """
         if timestep is None:
-            raise ValueError("Timestep must be provided for ClusteredAdamW.")
+            raise ValueError("Timestep must be provided for LoliAdamW.")
+        timestep = (torch.tensor(timestep) * 1000).round().long()
 
         loss = None
         if closure is not None:

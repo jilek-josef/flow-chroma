@@ -99,15 +99,15 @@ class LoraConfig:
     base_model_quant_level: Optional[str] = "full"
 
 
-def create_distribution(num_points, device=None):
-    # Probability range on x axis
+def create_distribution(num_points, time_shift_bias=0.0, device=None):
     x = torch.linspace(0, 1, num_points, device=device)
-
-    # Custom probability density function
     probabilities = -7.7 * ((x - 0.5) ** 2) + 2
-
-    # Normalize to sum to 1
     probabilities /= probabilities.sum()
+
+    # Apply time shift bias to modify distribution
+    x = torch.exp(torch.tensor(time_shift_bias)) / (
+            torch.exp(torch.tensor(time_shift_bias)) + (1 / x - 1)
+    )
 
     return x, probabilities
 
@@ -134,17 +134,20 @@ def upload_to_hf(model_filename, path_in_repo, repo_id, token, max_retries=3):
     print("Upload failed after multiple attempts.")
 
 
-def sample_from_distribution(x, probabilities, num_samples, device=None):
-    # Step 1: Compute the cumulative distribution function
+def sample_from_distribution(x, probabilities, num_samples, num_clusters, device=None):
     cdf = torch.cumsum(probabilities, dim=0)
+    cluster_bins = torch.linspace(0, 1, num_clusters + 1, device=device)
 
-    # Step 2: Generate uniform random samples
-    uniform_samples = torch.rand(num_samples, device=device)
+    # Choose a random cluster based on uniform probability
+    cluster_idx = torch.randint(0, num_clusters, (1,), device=device).item()
+    cluster_min = cluster_bins[cluster_idx]
+    cluster_max = cluster_bins[cluster_idx + 1]
 
-    # Step 3: Map uniform samples to the x values using the CDF
+    # Generate uniform random samples within the chosen cluster range
+    uniform_samples = cluster_min + torch.rand(num_samples, device=device) * (cluster_max - cluster_min)
+
+    # Map uniform samples to x values using the CDF
     indices = torch.searchsorted(cdf, uniform_samples, right=True)
-
-    # Get the corresponding x values for the sampled indices
     sampled_values = x[indices]
 
     return sampled_values
@@ -163,13 +166,11 @@ def prepare_sot_pairings(latents, training_config):
     #     F.sigmoid(torch.randn((n,), device=latents.device)), decimals=3
     # )
     num_points = 1000  # Number of points in the range
-    x, probabilities = create_distribution(num_points, device=latents.device)
+    #each batch will only contain timesteps from a single cluster, may be disabled by setting cluster to 1
+    x, probabilities = create_distribution(num_points, training_config.time_shift_bias, device=latents.device)
     input_timestep = sample_from_distribution(
-        x, probabilities, n, device=latents.device
+        x, probabilities, n, training_config.num_clusters, device=latents.device
     )
-
-    # biasing towards earlier more noisy steps where it's the most uncertain
-    input_timestep = time_shift(training_config.time_shift_bias, 1, input_timestep)
 
     timesteps = input_timestep[:, None, None]
     # 1 is full noise 0 is full image
