@@ -45,7 +45,7 @@ class LoliAdamW(AdamW):
         """
         if timestep is None:
             raise ValueError("Timestep must be provided for LoliAdamW.")
-        timestep = (torch.tensor(timestep) * 1000).round().long()
+        timestep = (torch.tensor(timestep) * 1000).mean().round().long()
 
         loss = None
         if closure is not None:

@@ -520,7 +520,7 @@ def train_chroma(rank, world_size, debug=False):
             progress_bar.set_postfix(loss=f"{loss.item():.6f}")
             progress_bar.update(1)
 
-            optimizer.step()
+            optimizer.step(timestep=input_timestep)
             scheduler.step()
 
             if training_config.wandb_project is not None and rank == 0:
