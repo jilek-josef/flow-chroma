@@ -17,6 +17,7 @@ from transformers import T5Tokenizer
 import wandb
 
 from src.dataloaders.dataloader import TextImageDataset
+from src.loli_optimizer import LoliAdamW
 from src.models.chroma.model import Chroma, chroma_params
 from src.models.chroma.utils import (
     vae_flatten,
@@ -44,10 +45,14 @@ import time
 @dataclass
 class TrainingConfig:
     total_epochs: int
-    time_shift_bias: float
+    time_shift_bias: float #the bigger bias the more will be timesteps shift to bigger values, which will lead to learning composition more than small details
     master_seed: int
     lr: float
     weight_decay: float
+    num_clusters: int #how many clusters to use in optimizer, more clusters will lead to more stable learning but as well more memory consumption
+    mse_weight: float #how much use mse loss, default 0.4
+    l1_weight: float #how much use l1 loss, default 0.4
+    cosine_weight: float # how much use cosine similarity based loss, default 0.4
     save_folder: str
     wandb_key: Optional[str] = None
     wandb_project: Optional[str] = None
@@ -185,7 +190,7 @@ def prepare_sot_pairings(latents, training_config):
     return noisy_latents, target, input_timestep, image_pos_id, latent_shape
 
 
-def init_optimizer(model, trained_layer_keywords, lr, wd, t_total):
+def init_optimizer(model, trained_layer_keywords, lr, wd, t_total, training_config):
     """Initialize AdamW (8-bit) optimizer with CosineAnnealingWarmRestarts scheduler."""
     trained_params = []
     for name, param in model.named_parameters():
@@ -195,8 +200,10 @@ def init_optimizer(model, trained_layer_keywords, lr, wd, t_total):
         else:
             param.requires_grad = False
 
-    optimizer = bnb.optim.AdamW8bit(
+    optimizer = LoliAdamW(
         trained_params,
+        num_clusters=training_config.num_clusters,  # Number of optimizer clusters
+        max_timesteps=1000,  #Number of possible timesteps
         lr=lr,
         weight_decay=wd,
         betas=(0.9, 0.999),
@@ -311,6 +318,32 @@ def cache_latents(dataset, model_config, rank):
 
     return latents_cache, embeddings_cache, masks_cache
 
+class LoliLoss(nn.Module):
+    def __init__(self, mse_weight=0.4, l1_weight=0.4, cosine_weight=0.2):
+        super().__init__()
+        self.mse_weight = mse_weight
+        self.l1_weight = l1_weight
+        self.cosine_weight = cosine_weight
+        self.mse_loss = nn.MSELoss()
+        self.l1_loss = nn.L1Loss()
+
+    def forward(self, generated_latent, real_latent):
+        """
+        Compute the combined loss.
+        """
+        mse_loss = self.mse_loss(generated_latent, real_latent)
+        l1_loss = self.l1_loss(generated_latent, real_latent)
+        cosine_loss = 1 - torch.nn.functional.cosine_similarity(generated_latent, real_latent).mean()
+
+        # Weighted sum of losses
+        total_loss = (
+            self.mse_weight * mse_loss +
+            self.l1_weight * l1_loss +
+            self.cosine_weight * cosine_loss
+        )
+
+        return total_loss
+
 
 def train_chroma(rank, world_size, debug=False):
     config_data = load_config_from_json("training_config_chroma_lora.json")
@@ -404,7 +437,11 @@ def train_chroma(rank, world_size, debug=False):
         training_config.lr,
         training_config.weight_decay,
         training_config.total_epochs*len(latents_cache),  # Total training steps
+        training_config
     )
+
+    #mse pixel perfect aggressive, cosine general direction, l1 is something between
+    loli_loss_fn = LoliLoss(mse_weight=training_config.mse_weight, l1_weight=training_config.l1_weight, cosine_weight=training_config.cosine_weight)
 
     for i in range(0, training_config.total_epochs):
         training_config.master_seed += 1
@@ -469,7 +506,10 @@ def train_chroma(rank, world_size, debug=False):
                     timesteps=input_timestep.to(rank, non_blocking=True),
                     guidance=static_guidance.to(rank, non_blocking=True),
                 )
-                loss = F.mse_loss(pred, target)
+
+                #loss = F.mse_loss(pred, target)
+
+                loss = loli_loss_fn(pred, target)  # Returns a tensor
 
             loss.backward()
 
