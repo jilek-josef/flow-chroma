@@ -205,19 +205,16 @@ def init_optimizer(model, trained_layer_keywords, lr, wd, t_total, training_conf
         trained_params,
         num_clusters=training_config.num_clusters,  # Number of optimizer clusters
         max_timesteps=1000,  #Number of possible timesteps
+        lr_scheduler="CosineAnnealingWarmRestarts",
+        scheduler_T_0=max(t_total // 10, 1),  # First restart after 10% of training steps
+        scheduler_T_mult=2,  # Double the restart period each time
+        scheduler_eta_min=lr * 0.1,  # Minimum learning rate
         lr=lr,
         weight_decay=wd,
         betas=(0.9, 0.999),
     )
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0=max(t_total // 10, 1),  # First restart after 10% of training steps
-        T_mult=2,  # Double the restart period each time
-        eta_min=lr * 0.1,  # Minimum learning rate
-    )
-
-    return optimizer, scheduler
+    return optimizer
 
 
 def save_part(model, trained_layer_keywords, path):
@@ -432,7 +429,7 @@ def train_chroma(rank, world_size, debug=False):
     # Cache latents and embeddings before training
     latents_cache, embeddings_cache, masks_cache = cache_latents(dataset, model_config, rank)
 
-    optimizer, scheduler = init_optimizer(
+    optimizer = init_optimizer(
         model,
         trained_layer_keywords,
         training_config.lr,
@@ -522,7 +519,6 @@ def train_chroma(rank, world_size, debug=False):
             progress_bar.update(1)
 
             optimizer.step(timestep=optim_time)
-            scheduler.step()
 
             if training_config.wandb_project is not None and rank == 0:
                 wandb.log({"loss": loss.detach().clone(), "lr": training_config.lr})
