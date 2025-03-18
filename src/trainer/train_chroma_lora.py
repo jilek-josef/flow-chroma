@@ -201,6 +201,12 @@ def init_optimizer(model, trained_layer_keywords, lr, wd, t_total, training_conf
         else:
             param.requires_grad = False
 
+    optimizer_kwargs = {
+        "lr": lr,
+        "weight_decay": wd,
+        "betas": (0.9, 0.999),
+    }
+
     optimizer = LoliAdamW(
         trained_params,
         num_clusters=training_config.num_clusters,  # Number of optimizer clusters
@@ -209,9 +215,7 @@ def init_optimizer(model, trained_layer_keywords, lr, wd, t_total, training_conf
         scheduler_T_0=max(t_total // 10, 1),  # First restart after 10% of training steps
         scheduler_T_mult=2,  # Double the restart period each time
         scheduler_eta_min=lr * 0.1,  # Minimum learning rate
-        lr=lr,
-        weight_decay=wd,
-        betas=(0.9, 0.999),
+        optimizer_kwargs=optimizer_kwargs
     )
 
     return optimizer

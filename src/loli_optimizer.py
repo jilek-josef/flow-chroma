@@ -14,7 +14,7 @@ class LoliAdamW(Optimizer):
         scheduler_T_mult=2,
         scheduler_eta_min=1e-6,
         scheduler_last_epoch=-1,
-        **kwargs
+        optimizer_kwargs=None
     ):
         """
         Loli AdamW: Treats different timesteps independently by maintaining
@@ -30,7 +30,7 @@ class LoliAdamW(Optimizer):
             scheduler_eta_min (float)
             **kwargs: Other AdamW arguments (e.g., lr, betas, weight_decay)
         """
-        super().__init__(params, **kwargs)
+        super().__init__(params, **optimizer_kwargs)
 
         self.num_clusters = num_clusters
         self.cluster_size = max_timesteps // num_clusters  # Timesteps per cluster
@@ -40,7 +40,7 @@ class LoliAdamW(Optimizer):
         self.cluster_states = list()
         self.lr_scheduler_states = list()
         for i in range(num_clusters):
-            optimizer = AdamW(params=params, **kwargs)
+            optimizer = AdamW(params=params, **optimizer_kwargs)
             if lr_scheduler == "CosineAnnealingWarmRestarts":
                 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                     optimizer,
