@@ -30,7 +30,6 @@ class LoliAdamW(Optimizer):
             scheduler_eta_min (float)
             **kwargs: Other AdamW arguments (e.g., lr, betas, weight_decay)
         """
-        super().__init__(params, **optimizer_kwargs)
 
         self.num_clusters = num_clusters
         self.cluster_size = max_timesteps // num_clusters  # Timesteps per cluster
