@@ -3,54 +3,22 @@ from numpy.ma.core import append
 from torch.optim import AdamW, Optimizer
 
 
-class LoliAdamW(Optimizer):
-    def __init__(
-        self,
-        params,
-        num_clusters=10,  # Number of optimizer clusters
-        max_timesteps=1000,  # Maximum diffusion timestep
-        lr_scheduler="CosineAnnealingWarmRestarts",
-        scheduler_T_0=100,
-        scheduler_T_mult=2,
-        scheduler_eta_min=1e-6,
-        scheduler_last_epoch=-1,
-        optimizer_kwargs=None
-    ):
+class LoliOptimizer:
+    def __init__(self, num_clusters, max_timesteps, lr_scheduler, scheduler_kwargs, optimizer_kwargs):
         """
-        Loli AdamW: Treats different timesteps independently by maintaining
-        separate optimizer states for different timestep clusters.
+        Interface for Loli optimizers that maintain separate optimizer states per timestep cluster.
 
         Args:
-            params: Model parameters
-            num_clusters (int): Number of timestep clusters (fewer clusters = less memory)
-            max_timesteps (int): Maximum diffusion timestep in the dataset
-            lr_scheduler="CosineAnnealingWarmRestarts": currently no other supported
-            scheduler_T_0 (int) Scheduler parameters here
-            scheduler_T_mult (int)
-            scheduler_eta_min (float)
-            **kwargs: Other AdamW arguments (e.g., lr, betas, weight_decay)
+            num_clusters (int): Number of timestep clusters
+            max_timesteps (int): Maximum diffusion timestep
         """
-
+        self.lr_scheduler_states = None #must be implemented
+        self.cluster_states = None #must be implemented
         self.num_clusters = num_clusters
-        self.cluster_size = max_timesteps // num_clusters  # Timesteps per cluster
-        self.lr_scheduler = "CosineAnnealingWarmRestarts"
-
-        # Create a dictionary to hold optimizer states for each cluster
-        self.cluster_states = list()
-        self.lr_scheduler_states = list()
-        for i in range(num_clusters):
-            optimizer = AdamW(params=params, **optimizer_kwargs)
-            if lr_scheduler == "CosineAnnealingWarmRestarts":
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-                    optimizer,
-                    T_0=scheduler_T_0,
-                    T_mult=scheduler_T_mult,
-                    eta_min=scheduler_eta_min,
-                    last_epoch=scheduler_last_epoch
-                )
-                self.lr_scheduler_states.append(scheduler)
-            self.cluster_states.append(optimizer)
-
+        self.cluster_size = max_timesteps // num_clusters
+        self.lr_scheduler = lr_scheduler
+        self.scheduler_kwargs = scheduler_kwargs
+        self.optimizer_kwargs = optimizer_kwargs
 
     def get_cluster_idx(self, timestep):
         """Assign timestep to a cluster index."""
@@ -65,7 +33,7 @@ class LoliAdamW(Optimizer):
             timestep (float): Current diffusion timestep (0 to 1) -> will be multiplied to match timestep
         """
         if timestep is None:
-            raise ValueError("Timestep must be provided for LoliAdamW.")
+            raise ValueError("Timestep must be provided for LoliOptimizer.")
         timestep = (torch.tensor(timestep) * 1000).mean().round().long()
 
         cluster_id = self.get_cluster_idx(timestep)
@@ -73,3 +41,49 @@ class LoliAdamW(Optimizer):
         self.lr_scheduler_states[cluster_id].step()
 
         return optimizer_step
+
+    def zero_grad(self, timestep=None):
+        if timestep is None:
+            raise ValueError("Timestep must be provided for LoliOptimizer.")
+        timestep = (torch.tensor(timestep) * 1000).mean().round().long()
+
+        cluster_id = self.get_cluster_idx(timestep)
+        self.cluster_states[cluster_id].zero_grad()
+
+
+class LoliAdamW(LoliOptimizer):
+    def __init__(self,
+                 params,
+                 num_clusters=10,
+                 max_timesteps=1000,
+                 lr_scheduler="CosineAnnealingWarmRestarts",
+                 scheduler_kwargs=None,
+                 optimizer_kwargs=None
+                 ):
+        """
+        Loli AdamW: Treats different timesteps independently by maintaining
+        separate optimizer states for different timestep clusters.
+
+        Args:
+            params: Model parameters
+            num_clusters (int): Number of timestep clusters (fewer clusters = less memory)
+            max_timesteps (int): Maximum diffusion timestep in the dataset
+            lr_scheduler="CosineAnnealingWarmRestarts": currently no other supported
+            scheduler_kwargs ({}): Mandatory, Scheduler arguments
+            optimizer_kwargs ({}): Mandatory, AdamW arguments (e.g., lr, betas, weight_decay)
+        """
+
+        super().__init__(num_clusters, max_timesteps, lr_scheduler, scheduler_kwargs, optimizer_kwargs)
+
+        # Create a dictionary to hold optimizer states for each cluster
+        self.cluster_states = list()
+        self.lr_scheduler_states = list()
+        for i in range(num_clusters):
+            optimizer = AdamW(params=params, **optimizer_kwargs)
+            if self.lr_scheduler == "CosineAnnealingWarmRestarts":
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                    optimizer,
+                    **scheduler_kwargs
+                )
+                self.lr_scheduler_states.append(scheduler)
+            self.cluster_states.append(optimizer)

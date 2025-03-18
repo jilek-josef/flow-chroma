@@ -206,15 +206,18 @@ def init_optimizer(model, trained_layer_keywords, lr, wd, t_total, training_conf
         "weight_decay": wd,
         "betas": (0.9, 0.999),
     }
+    scheduler_kwargs = {
+        "T_0": max(t_total // 10, 1),  # First restart after 10% of training steps
+        "T_mult": 2,  # Double the restart period each time
+        "eta_min": lr * 0.1,  # Minimum learning rate
+    }
 
     optimizer = LoliAdamW(
         trained_params,
         num_clusters=training_config.num_clusters,  # Number of optimizer clusters
         max_timesteps=1000,  #Number of possible timesteps
         lr_scheduler="CosineAnnealingWarmRestarts",
-        scheduler_T_0=max(t_total // 10, 1),  # First restart after 10% of training steps
-        scheduler_T_mult=2,  # Double the restart period each time
-        scheduler_eta_min=lr * 0.1,  # Minimum learning rate
+        scheduler_kwargs=scheduler_kwargs,
         optimizer_kwargs=optimizer_kwargs
     )
 
@@ -497,7 +500,7 @@ def train_chroma(rank, world_size, debug=False):
             acc_embeddings.requires_grad_(True)
 
             # aliasing
-            optimizer.zero_grad()
+            optimizer.zero_grad(timestep=optim_time)
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 pred = model(
