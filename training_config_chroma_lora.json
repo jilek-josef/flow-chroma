@@ -10,6 +10,8 @@
         "l1_weight": 0.4,
         "cosine_weight": 0.2,
         "save_folder": "testing",
+        "enable_optimal_tsc": false,
+        "time_shift_enable": false,
         "wandb_key": null,
         "wandb_project": null,
         "wandb_run": null,

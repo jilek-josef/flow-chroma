@@ -54,6 +54,8 @@ class TrainingConfig:
     l1_weight: float #how much use l1 loss, default 0.4
     cosine_weight: float # how much use cosine similarity based loss, default 0.4
     save_folder: str
+    enable_optimal_tsc: bool = False
+    time_shift_enable: bool = False
     wandb_key: Optional[str] = None
     wandb_project: Optional[str] = None
     wandb_run: Optional[str] = None
@@ -99,15 +101,19 @@ class LoraConfig:
     base_model_quant_level: Optional[str] = "full"
 
 
-def create_distribution(num_points, time_shift_bias=0.0, device=None):
+def create_distribution(num_points, time_shift_enable, time_shift_bias=0.0, device=None):
     x = torch.linspace(0, 1, num_points, device=device)
-    probabilities = -7.7 * ((x - 0.5) ** 2) + 2
-    probabilities /= probabilities.sum()
 
-    # Apply time shift bias to modify distribution
-    x = torch.exp(torch.tensor(time_shift_bias)) / (
-            torch.exp(torch.tensor(time_shift_bias)) + (1 / x - 1)
-    )
+    if time_shift_enable:
+        # Apply time shift bias to modify x
+        bias = torch.tensor(time_shift_bias, device=device)
+        x = torch.exp(bias) / (torch.exp(bias) + (1 / x - 1))
+        # Create a shaped distribution
+        probabilities = -7.7 * ((x - 0.5) ** 2) + 2
+        probabilities /= probabilities.sum()
+    else:
+        # No time shift: flat uniform distribution
+        probabilities = torch.ones_like(x) / num_points
 
     return x, probabilities
 
@@ -177,10 +183,11 @@ def prepare_sot_pairings(latents, training_config):
     noise = torch.randn_like(latents)
 
     # compute OT pairings
-    transport_cost, indices = cosine_optimal_transport(
-        latents.reshape(n, -1), noise.reshape(n, -1)
-    )
-    noise = noise[indices[1].view(-1)]
+    if training_config.enable_optimal_tsc:
+        transport_cost, indices = cosine_optimal_transport(
+            latents.reshape(n, -1), noise.reshape(n, -1)
+        )
+        noise = noise[indices[1].view(-1)]
 
     # random lerp points
     noisy_latents = latents * (1 - timesteps) + noise * timesteps
