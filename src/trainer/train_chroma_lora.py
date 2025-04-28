@@ -1,5 +1,8 @@
 import sys
 import os
+
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 import json
 from datetime import datetime
 from dataclasses import dataclass, asdict
