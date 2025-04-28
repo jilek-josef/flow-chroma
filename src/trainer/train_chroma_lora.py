@@ -173,7 +173,7 @@ def prepare_sot_pairings(latents, training_config):
     # )
     num_points = 1000  # Number of points in the range
     #each batch will only contain timesteps from a single cluster, may be disabled by setting cluster to 1
-    x, probabilities = create_distribution(num_points, training_config.time_shift_bias, device=latents.device)
+    x, probabilities = create_distribution(num_points, training_config.time_shift_enable, training_config.time_shift_bias, device=latents.device)
     input_timestep = sample_from_distribution(
         x, probabilities, n, training_config.num_clusters, device=latents.device
     )
